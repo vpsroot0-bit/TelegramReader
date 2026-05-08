@@ -1,6 +1,5 @@
 package com.example.telegramreader;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.os.AsyncTask;
@@ -11,25 +10,27 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509TrustManager;
-
 public class MessagesActivity extends AppCompatActivity {
+
+    // 👇 این لینک رو با آدرس Web App که از Google Apps Script گرفتی، جایگزین کن
+    private static final String PROXY_URL = "https://script.google.com/macros/s/AKfycbxtU1ZV8u7g9Ghk85odV_Ia-mT4aj9n9Jdn6m-V-SckG4m4XJYi3lk-SfHEO4X7Ryh1ig/exec";
 
     private RecyclerView recyclerMessages;
     private MessageAdapter adapter;
     private List<Message> messages = new ArrayList<>();
     private String channel;
+    private Gson gson = new Gson();
 
     public static void start(Context context, String channel) {
         Intent intent = new Intent(context, MessagesActivity.class);
@@ -57,7 +58,6 @@ public class MessagesActivity extends AppCompatActivity {
         new FetchMessagesTask(channel, before).execute();
     }
 
-    // AsyncTask برای دریافت پیام‌ها در پس‌زمینه
     private class FetchMessagesTask extends AsyncTask<Void, Void, String> {
 
         private String chid, before;
@@ -70,121 +70,46 @@ public class MessagesActivity extends AppCompatActivity {
         @Override
         protected String doInBackground(Void... voids) {
             try {
-                String urlPath = "/s/" + chid;
-                if (!before.equals("0")) {
-                    urlPath += "?before=" + before;
-                }
-                String sep = urlPath.contains("?") ? "&" : "?";
-                urlPath += sep + "_x_tr_sl=el&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp";
+                String requestUrl = PROXY_URL + "?action=messages&chid=" + chid + "&before=" + before;
+                URL url = new URL(requestUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("User-Agent", "Mozilla/5.0");
+                conn.setConnectTimeout(10000);
+                conn.setReadTimeout(15000);
+                conn.connect();
 
-                // try standard domains first
-                String[] domains = {"safebrowsing.google.com", "images.google.com",
-                        "maps.google.com", "news.google.com", "scholar.google.com",
-                        "mail.google.com", "drive.google.com"};
-                String response = null;
-                for (String domain : domains) {
-                    try {
-                        String urlStr = "https://" + domain + urlPath;
-                        response = fetchUrl(urlStr, "t-me.translate.goog");
-                        if (response != null && !response.startsWith("<!DOCTYPE html>")) break;
-                    } catch (Exception ignored) {}
+                BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                StringBuilder sb = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line);
                 }
-                if (response == null) {
-                    // fallback to fixed IP with SSL verify disabled
-                    String fallbackUrl = "https://216.239.38.120" + urlPath;
-                    response = fetchUrlWithIpFallback(fallbackUrl, "t-me.translate.goog");
-                }
-                return response;
+                reader.close();
+                return sb.toString();
             } catch (Exception e) {
                 return null;
             }
         }
 
-        private String fetchUrl(String urlStr, String host) throws Exception {
-            URL url = new URL(urlStr);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestProperty("Host", host);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(10000);
-            conn.connect();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            reader.close();
-            return sb.toString();
-        }
-
-        @SuppressLint("TrustAllX509TrustManager")
-        private String fetchUrlWithIpFallback(String urlStr, String host) throws Exception {
-            URL url = new URL(urlStr);
-            HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
-            // bypass SSL for IP address
-            TrustManager[] trustAllCerts = new TrustManager[]{
-                    new X509TrustManager() {
-                        @Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                        @Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                        @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                    }
-            };
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(null, trustAllCerts, new java.security.SecureRandom());
-            conn.setSSLSocketFactory(sc.getSocketFactory());
-            conn.setHostnameVerifier((hostname, session) -> true);
-
-            conn.setRequestProperty("Host", host);
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0");
-            conn.setConnectTimeout(8000);
-            conn.setReadTimeout(10000);
-            conn.connect();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-            StringBuilder sb = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line);
-            reader.close();
-            return sb.toString();
-        }
-
         @Override
-        protected void onPostExecute(String html) {
-            if (html == null) {
+        protected void onPostExecute(String json) {
+            if (json == null) {
                 Toast.makeText(MessagesActivity.this, "خطا در اتصال به تلگرام", Toast.LENGTH_SHORT).show();
                 return;
             }
-            // Parse HTML and extract messages
-            parseAndShow(html);
-        }
-    }
-
-    private void parseAndShow(String html) {
-        messages.clear();
-        String[] parts = html.split("<article");
-        for (int i = 1; i < parts.length; i++) {
-            String part = parts[i];
-            Message msg = new Message();
-            // text
-            int idxText = part.indexOf("tgme_widget_message_text");
-            if (idxText != -1) {
-                int start = part.indexOf(">", idxText) + 1;
-                int end = part.indexOf("</div>", start);
-                if (end != -1) {
-                    String text = part.substring(start, end);
-                    text = text.replaceAll("<[^>]+>", "").replace("&nbsp;", " ");
-                    msg.text = text.trim();
+            try {
+                Type listType = new TypeToken<List<Message>>() {}.getType();
+                List<Message> newMessages = gson.fromJson(json, listType);
+                if (newMessages != null) {
+                    messages.clear();
+                    messages.addAll(newMessages);
+                    adapter.notifyDataSetChanged();
+                } else {
+                    Toast.makeText(MessagesActivity.this, "پیامی یافت نشد", Toast.LENGTH_SHORT).show();
                 }
-            }
-            // date
-            int idxTime = part.indexOf("<time datetime=\"");
-            if (idxTime != -1) {
-                int start = part.indexOf("\"", idxTime) + 1;
-                int end = part.indexOf("\"", start);
-                msg.date = part.substring(start, end);
-            }
-            if (msg.text != null && !msg.text.isEmpty()) {
-                messages.add(msg);
+            } catch (Exception e) {
+                Toast.makeText(MessagesActivity.this, "خطا در پردازش اطلاعات", Toast.LENGTH_SHORT).show();
             }
         }
-        adapter.notifyDataSetChanged();
     }
 }
