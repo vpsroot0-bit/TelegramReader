@@ -10,12 +10,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
-
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
-import java.lang.reflect.Type;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -23,14 +19,10 @@ import java.util.List;
 
 public class MessagesActivity extends AppCompatActivity {
 
-    // 👇 این لینک رو با آدرس Web App که از Google Apps Script گرفتی، جایگزین کن
-    private static final String PROXY_URL = "https://script.google.com/macros/s/AKfycbxtU1ZV8u7g9Ghk85odV_Ia-mT4aj9n9Jdn6m-V-SckG4m4XJYi3lk-SfHEO4X7Ryh1ig/exec";
-
     private RecyclerView recyclerMessages;
     private MessageAdapter adapter;
     private List<Message> messages = new ArrayList<>();
     private String channel;
-    private Gson gson = new Gson();
 
     public static void start(Context context, String channel) {
         Intent intent = new Intent(context, MessagesActivity.class);
@@ -70,13 +62,28 @@ public class MessagesActivity extends AppCompatActivity {
         @Override
         protected String doInBackground(Void... voids) {
             try {
-                String requestUrl = PROXY_URL + "?action=messages&chid=" + chid + "&before=" + before;
-                URL url = new URL(requestUrl);
+                // ساخت مسیر درخواست
+                String urlPath = "/s/" + chid;
+                if (!before.equals("0")) {
+                    urlPath += "?before=" + before;
+                }
+                String sep = urlPath.contains("?") ? "&" : "?";
+                urlPath += sep + "_x_tr_sl=el&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp";
+
+                // مستقیماً با IP گوگل بدون SSL
+                String urlStr = "http://216.239.38.120" + urlPath;
+                URL url = new URL(urlStr);
                 HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("Host", "t-me.translate.goog");
                 conn.setRequestProperty("User-Agent", "Mozilla/5.0");
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(15000);
                 conn.connect();
+
+                int responseCode = conn.getResponseCode();
+                if (responseCode != 200) {
+                    return null;
+                }
 
                 BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
                 StringBuilder sb = new StringBuilder();
@@ -92,24 +99,43 @@ public class MessagesActivity extends AppCompatActivity {
         }
 
         @Override
-        protected void onPostExecute(String json) {
-            if (json == null) {
+        protected void onPostExecute(String html) {
+            if (html == null) {
                 Toast.makeText(MessagesActivity.this, "خطا در اتصال به تلگرام", Toast.LENGTH_SHORT).show();
                 return;
             }
-            try {
-                Type listType = new TypeToken<List<Message>>() {}.getType();
-                List<Message> newMessages = gson.fromJson(json, listType);
-                if (newMessages != null) {
-                    messages.clear();
-                    messages.addAll(newMessages);
-                    adapter.notifyDataSetChanged();
-                } else {
-                    Toast.makeText(MessagesActivity.this, "پیامی یافت نشد", Toast.LENGTH_SHORT).show();
+            parseAndShow(html);
+        }
+    }
+
+    private void parseAndShow(String html) {
+        messages.clear();
+        String[] parts = html.split("<article");
+        for (int i = 1; i < parts.length; i++) {
+            String part = parts[i];
+            Message msg = new Message();
+            // extract text
+            int idxText = part.indexOf("tgme_widget_message_text");
+            if (idxText != -1) {
+                int start = part.indexOf(">", idxText) + 1;
+                int end = part.indexOf("</div>", start);
+                if (end != -1) {
+                    String text = part.substring(start, end);
+                    text = text.replaceAll("<[^>]+>", "").replace("&nbsp;", " ");
+                    msg.text = text.trim();
                 }
-            } catch (Exception e) {
-                Toast.makeText(MessagesActivity.this, "خطا در پردازش اطلاعات", Toast.LENGTH_SHORT).show();
+            }
+            // extract date
+            int idxTime = part.indexOf("<time datetime=\"");
+            if (idxTime != -1) {
+                int start = part.indexOf("\"", idxTime) + 1;
+                int end = part.indexOf("\"", start);
+                msg.date = part.substring(start, end);
+            }
+            if (msg.text != null && !msg.text.isEmpty()) {
+                messages.add(msg);
             }
         }
+        adapter.notifyDataSetChanged();
     }
 }
