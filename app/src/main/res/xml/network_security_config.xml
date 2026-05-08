@@ -5,7 +5,6 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-    <!-- صرفاً برای رفع مشکل SSL روی IP -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">216.239.38.120</domain>
         <trust-anchors>
